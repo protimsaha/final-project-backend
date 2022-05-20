@@ -3,9 +3,10 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const token = jwt.sign({ foo: 'bar' }, 'shhhhh');
 const app = express()
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
-const port = process.env.PORT || 5000
+const port = process.env.PORT || 5000;
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors())
 app.use(express.json())
@@ -37,6 +38,7 @@ MongoClient.connect(uri, function (err, client) {
             const bookingCollection = client.db('doctors_portal').collection('bookings')
             const userCollection = client.db('doctors_portal').collection('users')
             const doctorCollection = client.db('doctors_portal').collection('doctors')
+            const paymentCollection = client.db('doctors_portal').collection('payments')
 
             app.get('/services', async (req, res) => {
                 const query = {}
@@ -60,6 +62,19 @@ MongoClient.connect(uri, function (err, client) {
             app.get('/user', verifyJWT, async (req, res) => {
                 const users = await userCollection.find().toArray()
                 res.send(users)
+            })
+
+            app.post('/create-client-intent', verifyJWT, async (req, res) => {
+                const service = req.body;
+                const price = service.price;
+                console.log(price)
+                const amount = price * 100;
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount: amount,
+                    currency: 'usd',
+                    payment_method_types: ['card']
+                })
+                res.send({ clientSecret: paymentIntent.client_secret })
             })
 
             app.get('/admin/:email', async (req, res) => {
@@ -104,6 +119,27 @@ MongoClient.connect(uri, function (err, client) {
                 return res.send({ success: true, result })
             })
 
+            app.get('/bookings/:id', async (req, res) => {
+                const id = req.params.id;
+                const query = { _id: ObjectId(id) }
+                const result = await bookingCollection.findOne(query)
+                res.send(result)
+            })
+
+            app.patch('/bookings/:id', verifyJWT, async (req, res) => {
+                const id = req.params.id;
+                const payment = req.body;
+                const filter = { _id: ObjectId(id) }
+                const updatedDoc = {
+                    $set: {
+                        paid: true,
+                        transectionId: payment.transectionId
+                    }
+                }
+                const updatedPayment = await bookingCollection.updateOne(filter, updatedDoc)
+                const updatedBooking = await paymentCollection.insertOne(payment)
+                res.send(updatedDoc)
+            })
 
             app.get('/bookings', verifyJWT, async (req, res) => {
                 const patient = req.query.patient;
